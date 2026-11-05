@@ -12,6 +12,7 @@ st.set_page_config(
 st.title("🧪 화학 물질 정보 검색")
 st.write("물질의 기본 정보와 구조식, 안전 정보를 검색하고 비교할 수 있어요.")
 
+
 # --------------------------------------------------
 # PubChem에서 물질 기본 정보 가져오기
 # --------------------------------------------------
@@ -29,10 +30,9 @@ def get_compound_info(name):
         data = response.json()
 
         properties = data["PropertyTable"]["Properties"][0]
-        cid = properties["CID"]
 
         return {
-            "CID": cid,
+            "CID": properties["CID"],
             "분자식": properties.get("MolecularFormula", "정보 없음"),
             "분자량": properties.get("MolecularWeight", "정보 없음")
         }
@@ -52,7 +52,7 @@ def get_structure_image(cid):
 
 
 # --------------------------------------------------
-# 안전 정보 가져오기
+# PubChem에서 안전 정보 가져오기
 # --------------------------------------------------
 @st.cache_data(show_spinner=False)
 def get_safety_info(cid):
@@ -69,16 +69,19 @@ def get_safety_info(cid):
         results = []
 
         def find_text(obj):
-            """PubChem 응답에서 안전 정보 문구를 찾아 목록에 저장"""
             if isinstance(obj, dict):
                 information = obj.get("Information")
+
                 if isinstance(information, list):
                     for item in information:
                         value = item.get("Value", {})
+
                         if isinstance(value, dict):
                             strings = value.get("StringWithMarkup", [])
+
                             for string_item in strings:
                                 text = string_item.get("String")
+
                                 if text:
                                     results.append(text)
 
@@ -91,9 +94,10 @@ def get_safety_info(cid):
 
         find_text(data)
 
-        # 중복 제거 및 빈 문구 제거
         return list(dict.fromkeys(
-            text.strip() for text in results if isinstance(text, str) and text.strip()
+            text.strip()
+            for text in results
+            if isinstance(text, str) and text.strip()
         ))
 
     except Exception:
@@ -101,7 +105,7 @@ def get_safety_info(cid):
 
 
 # --------------------------------------------------
-# API 키 없이 주요 안전 용어를 한국어로 변환
+# 안전 정보 표현을 읽기 쉬운 한국어로 정리
 # --------------------------------------------------
 def translate_safety_terms(text):
     replacements = {
@@ -118,20 +122,58 @@ def translate_safety_terms(text):
         "Environmental Hazard": "환경 유해성",
         "Danger": "위험",
         "Warning": "경고",
-        "Causes serious eye irritation": "심한 눈 자극을 일으킴",
-        "Causes skin irritation": "피부 자극을 일으킴",
-        "May cause respiratory irritation": "호흡기 자극을 일으킬 수 있음",
-        "Harmful if swallowed": "삼키면 유해함",
-        "Avoid breathing dust": "분진을 흡입하지 않도록 할 것",
-        "Wear protective gloves": "보호장갑을 착용할 것",
-        "Keep out of reach of children": "어린이의 손이 닿지 않는 곳에 보관할 것",
+        "Causes serious eye irritation": "심한 눈 자극을 일으킬 수 있습니다.",
+        "Causes skin irritation": "피부 자극을 일으킬 수 있습니다.",
+        "May cause respiratory irritation": "호흡기 자극을 일으킬 수 있습니다.",
+        "Harmful if swallowed": "삼키면 유해할 수 있습니다.",
+        "Avoid breathing dust": "분진을 흡입하지 않도록 주의해야 합니다.",
+        "Wear protective gloves": "보호장갑을 착용해야 합니다.",
+        "Keep out of reach of children": "어린이의 손이 닿지 않는 곳에 보관해야 합니다.",
+        "May cause": "일으킬 수 있습니다.",
+        "Causes": "일으킵니다.",
+        "Do not": "하지 마세요.",
+        "Avoid": "피해야 합니다."
     }
 
     result = text
+
     for english, korean in replacements.items():
         result = result.replace(english, korean)
 
     return result
+
+
+# --------------------------------------------------
+# 안전 정보를 항목별로 분류
+# --------------------------------------------------
+def organize_safety_info(safety_info):
+    categories = {
+        "위험성": [],
+        "취급 시 주의사항": [],
+        "기타 안전 정보": []
+    }
+
+    hazard_keywords = [
+        "hazard", "toxic", "toxicity", "irritation", "harmful",
+        "danger", "warning", "carcinogenic", "flammable"
+    ]
+
+    precaution_keywords = [
+        "avoid", "wear", "keep", "store", "handling",
+        "protective", "do not", "first aid"
+    ]
+
+    for item in safety_info:
+        lower_item = item.lower()
+
+        if any(word in lower_item for word in hazard_keywords):
+            categories["위험성"].append(item)
+        elif any(word in lower_item for word in precaution_keywords):
+            categories["취급 시 주의사항"].append(item)
+        else:
+            categories["기타 안전 정보"].append(item)
+
+    return categories
 
 
 # --------------------------------------------------
@@ -178,6 +220,7 @@ if st.session_state.get("current_info"):
     col2.metric("분자량", f'{info["분자량"]} g/mol')
     col3.metric("PubChem CID", cid)
 
+    # 분자 구조
     st.markdown("### 🧬 분자 구조")
 
     image_url = get_structure_image(cid)
@@ -198,7 +241,10 @@ if st.session_state.get("current_info"):
 
     # 비교 목록에 추가
     if st.button("비교 목록에 추가"):
-        if not any(item["CID"] == cid for item in st.session_state.compare_list):
+        if not any(
+            item["CID"] == cid
+            for item in st.session_state.compare_list
+        ):
             st.session_state.compare_list.append({
                 "물질명": name,
                 "CID": cid,
@@ -216,21 +262,27 @@ if st.session_state.get("current_info"):
         safety_info = get_safety_info(cid)
 
     if safety_info:
-        translated_rows = [
-            {"안전 정보": translate_safety_terms(item)}
-            for item in safety_info
-        ]
+        organized_info = organize_safety_info(safety_info)
 
-        st.dataframe(
-            pd.DataFrame(translated_rows),
-            use_container_width=True,
-            hide_index=True
-        )
+        for category, items in organized_info.items():
+            if items:
+                st.markdown(f"#### {category}")
+
+                for item in items:
+                    korean_text = translate_safety_terms(item)
+
+                    st.markdown(f"- {korean_text}")
+
+        with st.expander("영어 원문 보기"):
+            for item in safety_info:
+                st.write(f"- {item}")
 
         st.caption(
-            "한국어 표기는 주요 용어를 치환한 결과입니다. "
-            "전체 문장이 번역된 것은 아니므로 원문과 공식 SDS도 확인하세요."
+            "한국어 설명은 주요 안전 용어를 바꿔 표시한 것입니다. "
+            "모든 문장이 완전히 번역된 것은 아니므로, 실제 취급 전에는 "
+            "공식 안전자료(SDS)와 원문을 확인하세요."
         )
+
     else:
         st.info("이 물질의 안전 정보를 가져오지 못했습니다.")
 
@@ -262,6 +314,7 @@ if st.session_state.compare_list:
     if st.button("비교 목록 비우기"):
         st.session_state.compare_list = []
         st.rerun()
+
 else:
     st.info("검색한 물질을 비교 목록에 추가하면 여기에 표시됩니다.")
 
