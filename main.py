@@ -48,6 +48,7 @@ def search_chemical(name):
 
 @st.cache_data(ttl=3600)
 def get_structure_image(cid):
+    """PubChem에서 2D 분자 구조 이미지 가져오기"""
     url = (
         "https://pubchem.ncbi.nlm.nih.gov/rest/pug/"
         f"compound/cid/{cid}/PNG"
@@ -56,6 +57,76 @@ def get_structure_image(cid):
     response = requests.get(url, timeout=15)
     response.raise_for_status()
     return response.content
+
+
+@st.cache_data(ttl=3600)
+def get_safety_info(cid):
+    """PubChem PUG View에서 안전성·위험성 관련 자료 가져오기"""
+    url = (
+        "https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/"
+        f"data/compound/{cid}/JSON"
+    )
+
+    response = requests.get(
+        url,
+        params={"heading": "Safety and Hazards"},
+        timeout=20
+    )
+
+    if response.status_code == 404:
+        return []
+
+    response.raise_for_status()
+    data = response.json()
+
+    rows = []
+
+    def extract_text(value):
+        """PubChem 자료에서 표시할 문자열 추출"""
+        texts = []
+
+        if isinstance(value, dict):
+            if isinstance(value.get("String"), str):
+                texts.append(value["String"])
+
+            for key, item in value.items():
+                if key == "String":
+                    continue
+                texts.extend(extract_text(item))
+
+        elif isinstance(value, list):
+            for item in value:
+                texts.extend(extract_text(item))
+
+        return texts
+
+    def read_sections(sections, parent_heading=""):
+        for section in sections or []:
+            heading = section.get("TOCHeading", parent_heading)
+
+            for info in section.get("Information", []):
+                name = info.get("Name", "항목")
+                value_texts = extract_text(info.get("Value", []))
+
+                value_texts = list(dict.fromkeys(
+                    text.strip()
+                    for text in value_texts
+                    if text.strip()
+                ))
+
+                if value_texts:
+                    rows.append({
+                        "구분": heading,
+                        "항목": name,
+                        "내용": " / ".join(value_texts)
+                    })
+
+            read_sections(section.get("Section", []), heading)
+
+    record = data.get("Record", {})
+    read_sections(record.get("Section", []))
+
+    return rows
 
 
 # -----------------------------
@@ -106,9 +177,13 @@ if "chemical_result" in st.session_state:
     st.write("**PubChem CID:**", cid)
 
     st.markdown(
-        f"[🔗 PubChem에서 자세히 보기](https://pubchem.ncbi.nlm.nih.gov/compound/{cid})"
+        f"[🔗 PubChem에서 자세히 보기]"
+        f"(https://pubchem.ncbi.nlm.nih.gov/compound/{cid})"
     )
 
+    # -----------------------------
+    # 분자 구조
+    # -----------------------------
     st.divider()
     st.subheader("🧬 분자 구조")
 
@@ -135,11 +210,59 @@ if "chemical_result" in st.session_state:
         )
 
     except requests.exceptions.RequestException:
-        st.info("분자 구조 이미지를 불러오지 못했어요. PubChem 페이지에서 확인해 주세요.")
+        st.info(
+            "분자 구조 이미지를 불러오지 못했어요. "
+            "PubChem 페이지에서 확인해 주세요."
+        )
 
+    # -----------------------------
+    # 안전성 및 위험성 정보
+    # -----------------------------
     st.divider()
+    st.subheader("🛡️ 안전성 및 위험성 정보")
 
-    # 비교 목록에 추가
+    try:
+        safety_rows = get_safety_info(cid)
+
+        if safety_rows:
+            safety_df = pd.DataFrame(safety_rows)
+
+            st.dataframe(
+                safety_df,
+                use_container_width=True,
+                hide_index=True
+            )
+
+            st.caption(
+                "자료는 PubChem에 수록된 주석 정보입니다. "
+                "항목별 의미와 적용 조건은 원문 출처에서 확인해 주세요."
+            )
+
+            st.markdown(
+                f"[PubChem 안전성 자료 원문 보기]"
+                f"(https://pubchem.ncbi.nlm.nih.gov/compound/{cid}#section=Safety-and-Hazards)"
+            )
+
+        else:
+            st.info(
+                "PubChem에서 이 물질의 안전성 관련 자료를 찾지 못했어요. "
+                "자료가 없다는 뜻이지, 안전하다는 뜻은 아닙니다."
+            )
+
+    except requests.exceptions.Timeout:
+        st.warning("안전성 자료를 불러오는 데 시간이 오래 걸렸어요.")
+    except requests.exceptions.RequestException:
+        st.warning(
+            "안전성 자료를 불러오지 못했어요. "
+            "잠시 후 다시 시도해 주세요."
+        )
+    except (KeyError, TypeError, ValueError):
+        st.warning("안전성 자료의 형식을 읽지 못했어요.")
+
+    # -----------------------------
+    # 물질 비교 목록에 추가
+    # -----------------------------
+    st.divider()
     st.subheader("📊 물질 비교")
 
     if "comparison_list" not in st.session_state:
