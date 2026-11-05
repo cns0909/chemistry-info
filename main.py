@@ -1,4 +1,3 @@
-
 import streamlit as st
 import requests
 import pandas as pd
@@ -16,8 +15,12 @@ st.caption("자료 출처: PubChem, National Institutes of Health (NIH)")
 
 st.divider()
 
+
+@st.cache_data(ttl=3600)
 def search_chemical(name):
+    """물질 이름으로 PubChem에서 분자 정보 검색"""
     safe_name = quote(name.strip(), safe="")
+
     url = (
         "https://pubchem.ncbi.nlm.nih.gov/rest/pug/"
         f"compound/name/{safe_name}/property/"
@@ -39,6 +42,20 @@ def search_chemical(name):
         "분자량 (g/mol)": float(properties["MolecularWeight"]),
         "CID": properties["CID"]
     }
+
+
+@st.cache_data(ttl=3600)
+def get_structure_image(cid):
+    """PubChem에서 2D 분자 구조 이미지 가져오기"""
+    image_url = (
+        "https://pubchem.ncbi.nlm.nih.gov/rest/pug/"
+        f"compound/cid/{cid}/PNG"
+    )
+
+    response = requests.get(image_url, timeout=15)
+    response.raise_for_status()
+
+    return response.content
 
 
 chemical_name = st.text_input(
@@ -65,30 +82,45 @@ if st.button("🔍 물질 검색", type="primary", use_container_width=True):
         except (KeyError, IndexError, ValueError):
             st.error("자료를 읽는 중 오류가 발생했어요. 다른 이름으로 검색해 보세요.")
 
+
 if "chemical_result" in st.session_state:
     result = st.session_state["chemical_result"]
+    cid = result["CID"]
 
     st.subheader("📋 검색 결과")
 
     col1, col2 = st.columns(2)
     col1.metric("분자식", result["분자식"])
-    col2.metric("분자량", f'{result["분자량 (g/mol)"]:.3f} g/mol')
-
-    st.write("**검색한 물질:**", result["물질 이름"])
-    st.write("**PubChem CID:**", result["CID"])
-
-    image_url = (
-        "https://pubchem.ncbi.nlm.nih.gov/rest/pug/"
-        f'compound/cid/{result["CID"]}/PNG'
+    col2.metric(
+        "분자량",
+        f'{result["분자량 (g/mol)"]:.3f} g/mol'
     )
 
+    st.write("**검색한 물질:**", result["물질 이름"])
+    st.write("**PubChem CID:**", cid)
+
+    st.markdown(
+        f"[🔗 PubChem에서 자세히 보기](https://pubchem.ncbi.nlm.nih.gov/compound/{cid})"
+    )
+
+    st.divider()
+    st.subheader("🧬 분자 구조")
+
     try:
-        image_response = requests.get(image_url, timeout=15)
-        image_response.raise_for_status()
-        st.subheader("🧬 분자 구조")
-        st.image(image_response.content, caption="PubChem 분자 구조 이미지")
+        image = get_structure_image(cid)
+        st.image(
+            image,
+            caption="PubChem 2D 분자 구조 이미지",
+            use_container_width=True
+        )
+        st.caption(
+            "이미지는 원자와 결합의 배치를 나타내는 2D 구조 표현입니다. "
+            "분자식은 원자의 종류와 개수를 나타내며, 구조 이미지는 원자들이 "
+            "어떻게 연결되어 있는지 보여줍니다."
+        )
+
     except requests.exceptions.RequestException:
-        st.info("분자 구조 이미지를 불러오지 못했어요.")
+        st.info("분자 구조 이미지를 불러오지 못했어요. PubChem 페이지에서 확인해 주세요.")
 
     csv = pd.DataFrame([result]).to_csv(
         index=False
@@ -103,4 +135,7 @@ if "chemical_result" in st.session_state:
     )
 
 st.divider()
-st.caption("※ 검색 결과는 PubChem에서 제공하는 정보이며, 검색어에 따라 결과가 달라질 수 있습니다.")
+st.caption(
+    "※ 검색 결과는 PubChem에서 제공하는 정보이며, "
+    "검색어에 따라 결과가 달라질 수 있습니다."
+)
