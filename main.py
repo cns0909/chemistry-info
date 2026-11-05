@@ -27,9 +27,7 @@ def get_compound_info(name):
     try:
         response = requests.get(url, timeout=15)
         response.raise_for_status()
-        data = response.json()
-
-        properties = data["PropertyTable"]["Properties"][0]
+        properties = response.json()["PropertyTable"]["Properties"][0]
 
         return {
             "CID": properties["CID"],
@@ -81,7 +79,6 @@ def get_safety_info(cid):
 
                             for string_item in strings:
                                 text = string_item.get("String")
-
                                 if text:
                                     results.append(text)
 
@@ -105,75 +102,83 @@ def get_safety_info(cid):
 
 
 # --------------------------------------------------
-# 안전 정보 표현을 읽기 쉬운 한국어로 정리
+# OpenAI API로 안전 정보를 한국어로 요약
 # --------------------------------------------------
-def translate_safety_terms(text):
-    replacements = {
-        "Safety and Hazards": "안전 및 유해성",
-        "Hazard Statements": "유해·위험 문구",
-        "Precautionary Statements": "예방조치 문구",
-        "First Aid Measures": "응급조치",
-        "Fire Fighting Measures": "화재 진압 방법",
-        "Accidental Release Measures": "누출 사고 시 조치",
-        "Handling and Storage": "취급 및 저장 방법",
-        "Exposure Controls and Personal Protection": "노출 방지 및 개인 보호구",
-        "Toxicity": "독성",
-        "Health Hazard": "건강 유해성",
-        "Environmental Hazard": "환경 유해성",
-        "Danger": "위험",
-        "Warning": "경고",
-        "Causes serious eye irritation": "심한 눈 자극을 일으킬 수 있습니다.",
-        "Causes skin irritation": "피부 자극을 일으킬 수 있습니다.",
-        "May cause respiratory irritation": "호흡기 자극을 일으킬 수 있습니다.",
-        "Harmful if swallowed": "삼키면 유해할 수 있습니다.",
-        "Avoid breathing dust": "분진을 흡입하지 않도록 주의해야 합니다.",
-        "Wear protective gloves": "보호장갑을 착용해야 합니다.",
-        "Keep out of reach of children": "어린이의 손이 닿지 않는 곳에 보관해야 합니다.",
-        "May cause": "일으킬 수 있습니다.",
-        "Causes": "일으킵니다.",
-        "Do not": "하지 마세요.",
-        "Avoid": "피해야 합니다."
-    }
+def summarize_safety_with_ai(chemical_name, safety_info):
+    api_key = st.secrets.get("OPENAI_API_KEY", "")
 
-    result = text
+    if not api_key:
+        return None, "OPENAI_API_KEY가 설정되지 않았습니다."
 
-    for english, korean in replacements.items():
-        result = result.replace(english, korean)
+    if not safety_info:
+        return None, "요약할 안전 정보가 없습니다."
 
-    return result
+    # 너무 긴 자료가 전송되지 않도록 입력 길이 제한
+    source_text = "\n".join(safety_info)[:12000]
 
+    prompt = f"""
+다음은 PubChem에서 가져온 화학 물질 안전 정보입니다.
 
-# --------------------------------------------------
-# 안전 정보를 항목별로 분류
-# --------------------------------------------------
-def organize_safety_info(safety_info):
-    categories = {
-        "위험성": [],
-        "취급 시 주의사항": [],
-        "기타 안전 정보": []
-    }
+물질 이름: {chemical_name}
 
-    hazard_keywords = [
-        "hazard", "toxic", "toxicity", "irritation", "harmful",
-        "danger", "warning", "carcinogenic", "flammable"
-    ]
+안전 정보 원문:
+{source_text}
 
-    precaution_keywords = [
-        "avoid", "wear", "keep", "store", "handling",
-        "protective", "do not", "first aid"
-    ]
+위 원문에 있는 정보만 근거로 한국어 요약을 작성하세요.
 
-    for item in safety_info:
-        lower_item = item.lower()
+다음 항목을 제목과 짧은 문장으로 정리하세요.
+1. 물질의 주요 위험성
+2. 취급할 때 주의할 점
+3. 노출되었을 때 확인할 조치
 
-        if any(word in lower_item for word in hazard_keywords):
-            categories["위험성"].append(item)
-        elif any(word in lower_item for word in precaution_keywords):
-            categories["취급 시 주의사항"].append(item)
-        else:
-            categories["기타 안전 정보"].append(item)
+중요한 규칙:
+- 원문에 없는 위험이나 조치를 새로 만들어내지 마세요.
+- 원문에 정보가 없는 항목은 "제공된 자료에 정보가 없습니다"라고 표시하세요.
+- 위험의 정도를 원문보다 과장하거나 축소하지 마세요.
+- 고등학생이 읽기 쉬운 자연스러운 한국어를 사용하세요.
+- 안전 정보이므로 핵심 경고와 주의사항을 생략하지 마세요.
+- 진단이나 치료 지침을 임의로 추가하지 마세요.
+"""
 
-    return categories
+    try:
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "gpt-4.1-mini",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "너는 화학 물질 안전 정보를 정확하고 쉽게 설명하는 도우미야. "
+                            "제공된 자료에 없는 내용을 추측하지 마."
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "temperature": 0.2
+            },
+            timeout=60
+        )
+
+        response.raise_for_status()
+        data = response.json()
+
+        summary = data["choices"][0]["message"]["content"]
+        return summary, None
+
+    except requests.exceptions.HTTPError:
+        return None, (
+            "AI 요약 요청에 실패했습니다. API 키, 결제 설정, 사용량 한도를 확인해 주세요."
+        )
+    except Exception:
+        return None, "AI 요약 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
 
 
 # --------------------------------------------------
@@ -181,6 +186,9 @@ def organize_safety_info(safety_info):
 # --------------------------------------------------
 if "compare_list" not in st.session_state:
     st.session_state.compare_list = []
+
+if "current_info" not in st.session_state:
+    st.session_state.current_info = None
 
 
 # --------------------------------------------------
@@ -215,7 +223,6 @@ if st.session_state.get("current_info"):
     st.subheader(f"🔎 {name} 검색 결과")
 
     col1, col2, col3 = st.columns(3)
-
     col1.metric("분자식", info["분자식"])
     col2.metric("분자량", f'{info["분자량"]} g/mol')
     col3.metric("PubChem CID", cid)
@@ -262,25 +269,31 @@ if st.session_state.get("current_info"):
         safety_info = get_safety_info(cid)
 
     if safety_info:
-        organized_info = organize_safety_info(safety_info)
+        if st.button("🤖 안전 정보 한국어 요약하기"):
+            with st.spinner("AI가 안전 정보를 읽기 쉽게 정리하고 있어요..."):
+                summary, error = summarize_safety_with_ai(name, safety_info)
 
-        for category, items in organized_info.items():
-            if items:
-                st.markdown(f"#### {category}")
+            if summary:
+                st.session_state.safety_summary = summary
+                st.session_state.safety_summary_cid = cid
+            else:
+                st.session_state.safety_summary = None
+                st.warning(error)
 
-                for item in items:
-                    korean_text = translate_safety_terms(item)
+        if (
+            st.session_state.get("safety_summary")
+            and st.session_state.get("safety_summary_cid") == cid
+        ):
+            st.markdown("#### AI가 정리한 안전 정보")
+            st.markdown(st.session_state.safety_summary)
 
-                    st.markdown(f"- {korean_text}")
-
-        with st.expander("영어 원문 보기"):
+        with st.expander("PubChem 안전 정보 원문 보기"):
             for item in safety_info:
                 st.write(f"- {item}")
 
         st.caption(
-            "한국어 설명은 주요 안전 용어를 바꿔 표시한 것입니다. "
-            "모든 문장이 완전히 번역된 것은 아니므로, 실제 취급 전에는 "
-            "공식 안전자료(SDS)와 원문을 확인하세요."
+            "AI 요약은 참고용이며 원문의 일부 내용이 누락되거나 잘못 정리될 수 있습니다. "
+            "실제 취급 전에는 공식 안전자료(SDS)와 원문을 확인하세요."
         )
 
     else:
